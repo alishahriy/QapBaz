@@ -39,18 +39,16 @@ jobs:
           distribution: 'temurin'
           java-version: '11'
 
-      - name: Install Android command-line tools & SDK packages
+      - name: Install Android command-line tools & SDK
         run: |
           sudo mkdir -p $ANDROID_SDK_ROOT
           sudo chown $USER $ANDROID_SDK_ROOT
           curl -sSOL https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
           unzip -q commandlinetools-linux-9477386_latest.zip -d $ANDROID_SDK_ROOT/cmdline-tools
-          # move to a tools folder that sdkmanager expects
           mkdir -p $ANDROID_SDK_ROOT/cmdline-tools/tools
           mv $ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools/* $ANDROID_SDK_ROOT/cmdline-tools/tools/ || true
           export PATH=$ANDROID_SDK_ROOT/cmdline-tools/tools/bin:$PATH
           yes | sdkmanager --sdk_root=$ANDROID_SDK_ROOT "platform-tools" "${{ env.ANDROID_PLATFORMS }}" "build-tools;${{ env.ANDROID_BUILD_TOOLS }}"
-          # accept licenses
           yes | sdkmanager --licenses --sdk_root=$ANDROID_SDK_ROOT || true
 
       - name: Ensure Capacitor is available
@@ -58,7 +56,6 @@ jobs:
 
       - name: Init Capacitor if needed
         run: |
-          # اگر قبلا init انجام نشده باشد این دستور init را اجرا می‌کند
           if [ ! -f "capacitor.config.json" ] && [ ! -f "capacitor.config.ts" ]; then
             npx cap init qap-baz com.yourdomain.qapbaz --webDir=build || true
           else
@@ -74,23 +71,17 @@ jobs:
           fi
 
       - name: Copy web assets to native project
-        run: |
-          npx cap copy android || true
+        run: npx cap copy android || true
 
       - name: Make gradlew executable
-        run: |
-          if [ -f android/gradlew ]; then
-            chmod +x android/gradlew
-          fi
+        run: chmod +x android/gradlew || true
 
       - name: Build Android (Gradle release)
         working-directory: android
         env:
           ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
           JAVA_HOME: ${{ steps.setup-java.outputs.path || env.JAVA_HOME }}
-        run: |
-          # clean and assemble release
-          ./gradlew clean assembleRelease --no-daemon -Porg.gradle.jvmargs="-Xmx1536m" || (cat android/build.gradle && false)
+        run: ./gradlew clean assembleRelease --no-daemon -Porg.gradle.jvmargs="-Xmx1536m" || (cat android/build.gradle && false)
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
