@@ -5,32 +5,95 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+env:
+  NODE_VERSION: '18'
+  ANDROID_SDK_ROOT: /opt/android/sdk
+  ANDROID_BUILD_TOOLS: '33.0.2'
+  ANDROID_PLATFORMS: 'platforms;android-33'
+
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      NODE_VERSION: '18'
-      ANDROID_SDK_ROOT: /opt/android/sdk
+    timeout-minutes: 60
+
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
 
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: ${{ env.NODE_VERSION }}
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
 
-    - name: Install dependencies
-      run: npm install
+      - name: Install Node dependencies
+        run: npm ci
 
-    - name: Build web (React)
-      run: npm run build --if-present
+      - name: Build web (React)
+        run: npm run build --if-present
 
-    - name: Install Java
-      uses: actions/setup-java@v4
-      with:
-        distribution: 'temurin'
-        java-version: '11'
+      - name: Setup Java (Temurin 11)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '11'
 
-    - name: Install Android SDK tools
-      run: |
+      - name: Install Android command-line tools & SDK packages
+        run: |
+          sudo mkdir -p $ANDROID_SDK_ROOT
+          sudo chown $USER $ANDROID_SDK_ROOT
+          curl -sSOL https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
+          unzip -q commandlinetools-linux-9477386_latest.zip -d $ANDROID_SDK_ROOT/cmdline-tools
+          # move to a tools folder that sdkmanager expects
+          mkdir -p $ANDROID_SDK_ROOT/cmdline-tools/tools
+          mv $ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools/* $ANDROID_SDK_ROOT/cmdline-tools/tools/ || true
+          export PATH=$ANDROID_SDK_ROOT/cmdline-tools/tools/bin:$PATH
+          yes | sdkmanager --sdk_root=$ANDROID_SDK_ROOT "platform-tools" "${{ env.ANDROID_PLATFORMS }}" "build-tools;${{ env.ANDROID_BUILD_TOOLS }}"
+          # accept licenses
+          yes | sdkmanager --licenses --sdk_root=$ANDROID_SDK_ROOT || true
+
+      - name: Ensure Capacitor is available
+        run: npm install @capacitor/core @capacitor/cli
+
+      - name: Init Capacitor if needed
+        run: |
+          # اگر قبلا init انجام نشده باشد این دستور init را اجرا می‌کند
+          if [ ! -f "capacitor.config.json" ] && [ ! -f "capacitor.config.ts" ]; then
+            npx cap init qap-baz com.yourdomain.qapbaz --webDir=build || true
+          else
+            echo "Capacitor already initialized"
+          fi
+
+      - name: Add Android platform if missing
+        run: |
+          if [ ! -d "android" ]; then
+            npx cap add android || true
+          else
+            echo "android/ already exists"
+          fi
+
+      - name: Copy web assets to native project
+        run: |
+          npx cap copy android || true
+
+      - name: Make gradlew executable
+        run: |
+          if [ -f android/gradlew ]; then
+            chmod +x android/gradlew
+          fi
+
+      - name: Build Android (Gradle release)
+        working-directory: android
+        env:
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
+          JAVA_HOME: ${{ steps.setup-java.outputs.path || env.JAVA_HOME }}
+        run: |
+          # clean and assemble release
+          ./gradlew clean assembleRelease --no-daemon -Porg.gradle.jvmargs="-Xmx1536m" || (cat android/build.gradle && false)
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-apk
+          path: android/app/build/outputs/apk/release/*.apk
