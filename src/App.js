@@ -2,7 +2,11 @@ import React from 'react';
 import QapBaz from './QapBaz.component';
 
 function App() {
-  return <QapBaz />;
+  return (
+    <div>
+      <QapBaz />
+    </div>
+  );
 }
 
 export default App;
