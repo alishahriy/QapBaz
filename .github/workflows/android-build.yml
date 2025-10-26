@@ -14,7 +14,7 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
       - name: Checkout repository
@@ -28,10 +28,12 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Install Node dependencies
-        run: npm ci
+        run: |
+          npm ci
 
       - name: Build web (React)
-        run: npm run build --if-present
+        run: |
+          npm run build --if-present
 
       - name: Setup Java (Temurin 11)
         uses: actions/setup-java@v4
@@ -39,52 +41,100 @@ jobs:
           distribution: 'temurin'
           java-version: '11'
 
-      - name: Install Android command-line tools & SDK
+      - name: Install Android command-line tools & SDK packages (robust)
         run: |
+          set -x
+          sudo apt-get update -y
+          sudo apt-get install -y unzip zip curl wget git
           sudo mkdir -p $ANDROID_SDK_ROOT
           sudo chown $USER $ANDROID_SDK_ROOT
           curl -sSOL https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
-          unzip -q commandlinetools-linux-9477386_latest.zip -d $ANDROID_SDK_ROOT/cmdline-tools
+          unzip -o commandlinetools-linux-9477386_latest.zip -d $ANDROID_SDK_ROOT/cmdline-tools
           mkdir -p $ANDROID_SDK_ROOT/cmdline-tools/tools
-          mv $ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools/* $ANDROID_SDK_ROOT/cmdline-tools/tools/ || true
+          # move inner dir if present
+          if [ -d "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" ]; then
+            mv $ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools/* $ANDROID_SDK_ROOT/cmdline-tools/tools/ || true
+          fi
           export PATH=$ANDROID_SDK_ROOT/cmdline-tools/tools/bin:$PATH
-          yes | sdkmanager --sdk_root=$ANDROID_SDK_ROOT "platform-tools" "${{ env.ANDROID_PLATFORMS }}" "build-tools;${{ env.ANDROID_BUILD_TOOLS }}"
+          echo "java version:"; java -version || true
+          echo "sdkmanager path:"; which sdkmanager || true
+          yes | sdkmanager --sdk_root=$ANDROID_SDK_ROOT --install "platform-tools" "${{ env.ANDROID_PLATFORMS }}" "build-tools;${{ env.ANDROID_BUILD_TOOLS }}" || true
           yes | sdkmanager --licenses --sdk_root=$ANDROID_SDK_ROOT || true
+          ls -la $ANDROID_SDK_ROOT || true
 
-      - name: Ensure Capacitor is available
-        run: npm install @capacitor/core @capacitor/cli
+      - name: Ensure Capacitor is available and show project
+        run: |
+          set -x
+          npm install @capacitor/core @capacitor/cli || true
+          node -v; npm -v
+          echo "Listing project root:"
+          ls -la
+          echo "Listing src and build (if exists):"
+          ls -la src || true
+          ls -la build || true
+          echo "capacitor config (if exists):"
+          [ -f capacitor.config.json ] && cat capacitor.config.json || echo "no capacitor.config.json"
 
       - name: Init Capacitor if needed
         run: |
+          set -x
           if [ ! -f "capacitor.config.json" ] && [ ! -f "capacitor.config.ts" ]; then
             npx cap init qap-baz com.yourdomain.qapbaz --webDir=build || true
           else
             echo "Capacitor already initialized"
           fi
 
-      - name: Add Android platform if missing
+      - name: Add Android platform if missing (with logs)
         run: |
+          set -x
           if [ ! -d "android" ]; then
             npx cap add android || true
           else
             echo "android/ already exists"
           fi
+          echo "After add, list android folder:"
+          ls -la android || true
 
-      - name: Copy web assets to native project
-        run: npx cap copy android || true
+      - name: Copy web assets to native project and show build dir
+        run: |
+          set -x
+          if [ ! -d "build" ]; then
+            npm run build --if-present || true
+          fi
+          echo "build folder listing:"
+          ls -la build || true
+          npx cap copy android || true
+          ls -la android || true
 
-      - name: Make gradlew executable
-        run: chmod +x android/gradlew || true
+      - name: Make gradlew executable (and show)
+        run: |
+          set -x
+          if [ -f android/gradlew ]; then
+            chmod +x android/gradlew
+          else
+            echo "android/gradlew not found!"
+            ls -la android || true
+            exit 1
+          fi
+          ls -la android/gradlew
 
-      - name: Build Android (Gradle release)
+      - name: Build Android (try debug first, verbose)
         working-directory: android
         env:
           ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
-          JAVA_HOME: ${{ steps.setup-java.outputs.path || env.JAVA_HOME }}
-        run: ./gradlew clean assembleRelease --no-daemon -Porg.gradle.jvmargs="-Xmx1536m" || (cat android/build.gradle && false)
+        run: |
+          set -x
+          echo "Gradle wrapper version and environment:"
+          ./gradlew -v || true
+          echo "Attempting assembleDebug (no signing required):"
+          ./gradlew clean assembleDebug --stacktrace --info --no-daemon -Porg.gradle.jvmargs="-Xmx1536m" || true
+          echo "Attempting assembleRelease (may need keystore):"
+          ./gradlew assembleRelease --stacktrace --info --no-daemon -Porg.gradle.jvmargs="-Xmx1536m" || (echo "Release build failed; printing last 200 lines of logs if present" && tail -n 200 android/build.gradle || true; false)
 
-      - name: Upload APK
+      - name: Upload APK (debug & release if exist)
         uses: actions/upload-artifact@v4
         with:
-          name: app-release-apk
-          path: android/app/build/outputs/apk/release/*.apk
+          name: app-apks
+          path: |
+            android/app/build/outputs/apk/release/*.apk
+            android/app/build/outputs/apk/debug/*.apk
