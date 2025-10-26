@@ -1,0 +1,36 @@
+name: Build React Web (QapBaz)
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # مرحله 1: گرفتن کد پروژه
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # مرحله 2: نصب Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      # مرحله 3: نصب وابستگی‌های npm
+      - name: Install dependencies
+        run: npm ci
+
+      # مرحله 4: ساخت پروژه React وب
+      - name: Build React web
+        run: npm run build
+
+      # مرحله 5: ذخیره خروجی build به عنوان artifact
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: react-web-build
+          path: build/
